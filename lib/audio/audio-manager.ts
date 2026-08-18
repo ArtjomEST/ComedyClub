@@ -51,7 +51,7 @@ class AudioManager{
   voiceVolume(){return this.settings.muted?0:Math.min(1,this.settings.master*this.settings.voice)}
   attachVoiceStream(stream:MediaStream,onPlaying?:()=>void,onBlocked?:()=>void){
     if(typeof document==="undefined")return()=>{};
-    const audio=document.createElement("audio");audio.autoplay=true;audio.playsInline=true;audio.setAttribute("aria-hidden","true");audio.style.display="none";audio.srcObject=stream;document.body.appendChild(audio);
+    const audio=document.createElement("audio");audio.autoplay=true;audio.setAttribute("playsinline","");audio.setAttribute("aria-hidden","true");audio.style.display="none";audio.srcObject=stream;document.body.appendChild(audio);
     const sync=()=>{audio.volume=this.voiceVolume();audio.muted=this.voiceVolume()===0};
     const play=()=>{sync();void audio.play().then(()=>onPlaying?.()).catch(()=>onBlocked?.())};
     const unlock=()=>play();const unsubscribe=this.subscribe(sync);audio.addEventListener("playing",()=>onPlaying?.());window.addEventListener("pointerdown",unlock,{passive:true});play();

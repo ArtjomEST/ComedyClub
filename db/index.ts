@@ -1,13 +1,13 @@
-import { env } from "cloudflare:workers";
-import { drizzle } from "drizzle-orm/d1";
+import { Pool } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-serverless";
 import * as schema from "./schema";
 
 export function getDb() {
-  if (!env.DB) {
-    throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
-    );
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is required for Xata PostgreSQL.");
   }
 
-  return drizzle(env.DB, { schema });
+  const pool = new Pool({ connectionString, max: 4 });
+  return drizzle(pool, { schema });
 }

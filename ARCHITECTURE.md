@@ -8,11 +8,12 @@
 | Authoritative API | `app/api/game/route.ts` validates lobby, match, reaction, vote, result and rating commands |
 | Game contract | `lib/game/types.ts` contains the phase, snapshot, player, result and audio types |
 | Network client | `lib/game/client.ts` is the only browser-facing game API adapter |
-| Voice | `lib/voice/voice-manager.ts` manages microphone capture, performer-only WebRTC publishing and D1-backed SDP/ICE signaling |
+| Voice | `lib/voice/voice-manager.ts` manages microphone capture, performer-only WebRTC publishing and PostgreSQL-backed SDP/ICE signaling |
 | Audio | `lib/audio/audio-manager.ts` owns procedural ambience, music ducking, cues and persistent category volumes |
-| Persistence | Cloudflare D1 stores users, lobbies, presence, matches, ballots, reactions, results and signaling messages |
+| Persistence | Xata PostgreSQL stores users, lobbies, presence, matches, ballots, reactions, results and signaling messages |
+| Hosting | Netlify builds the standard Next.js app and runs the authoritative API as server functions |
 
-The current vertical slice uses short snapshot polling instead of trusting local state. D1 is shared across browser sessions, so lobby membership, readiness, timers, reactions, votes, results, reconnects and rematches are genuine cross-client interactions.
+The current vertical slice uses short snapshot polling instead of trusting local state. Xata is shared across browser sessions, so lobby membership, readiness, timers, reactions, votes, results, reconnects and rematches are genuine cross-client interactions.
 
 ## Authoritative match model
 
@@ -34,8 +35,8 @@ Important rules enforced by the API:
 
 ## Data model
 
-`db/schema.ts` defines `users`, `lobbies`, `lobby_players`, `matches`, `performances`, `votes`, `reactions`, `match_results` and `voice_signals`. The generated Drizzle migrations live in `drizzle/`. Runtime `CREATE IF NOT EXISTS` statements keep local and newly provisioned D1 previews bootable without weakening the durable schema.
+`db/schema.ts` defines `users`, `lobbies`, `lobby_players`, `matches`, `performances`, `votes`, `reactions`, `match_results` and `voice_signals`. The generated PostgreSQL migration lives in `drizzle-pg/`. Shared idempotent statements in `db/schema-statements.json` keep local and newly provisioned Xata branches bootable; `npm run db:migrate` applies the same schema explicitly.
 
 ## Production scaling path
 
-The vertical slice is fully playable. For a large public launch, replace snapshot polling and D1 signaling with a WebSocket/Durable Object gateway, add a TURN service for restrictive networks, connect durable account authentication, and route moderation reports to a review system. The client boundaries already isolate those services from presentation code.
+The vertical slice is fully playable. For a large public launch, replace snapshot polling and database-backed signaling with a dedicated WebSocket/SFU gateway, add a TURN service for restrictive networks, connect durable account authentication, and route moderation reports to a review system. The client boundaries already isolate those services from presentation code.

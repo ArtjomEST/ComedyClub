@@ -1,4 +1,9 @@
 import {isStageIntroId,stageIntroDurationMs,TOPICS,type GamePhase,type LobbySnapshot,type MatchResult,type Player,type ReactionKind,type StageIntroId} from "../../../lib/game/types";
+import {getPostgresDatabase,type PostgresStatement} from "../../../lib/db/postgres";
+import schemaStatements from "../../../db/schema-statements.json";
+
+export const runtime="nodejs";
+export const dynamic="force-dynamic";
 
 type Row=Record<string,unknown>;
 const nowIso=()=>new Date().toISOString();
@@ -7,32 +12,13 @@ const code=()=>`${["LOL","LMAO","HAHA","MIC"][Math.floor(Math.random()*4)]}-${Ma
 const allowedReactions=new Set<ReactionKind>(["laugh","applause","fire","dead","awkward","tomato"]);
 const introPreparationMs=(introId:unknown)=>Math.max(4000,stageIntroDurationMs(introId)+2500);
 
-type ClubDatabase=typeof import("cloudflare:workers")["env"]["DB"];
+type ClubDatabase=ReturnType<typeof getPostgresDatabase>;
 let database:ClubDatabase|null=null;
 let schemaReady=false;
 async function initDb(){
-  if(!database){const worker=await import("cloudflare:workers");database=worker.env.DB||null}
+  if(!database)database=getPostgresDatabase();
   if(database&&!schemaReady){
-    const statements=[
-      `CREATE TABLE IF NOT EXISTS users(id text PRIMARY KEY NOT NULL,email text UNIQUE,username text NOT NULL,avatar text,rating integer DEFAULT 1000 NOT NULL,xp integer DEFAULT 0 NOT NULL,level integer DEFAULT 1 NOT NULL,intro_id text DEFAULT 'dramatic-look' NOT NULL,created_at text NOT NULL)`,
-      `CREATE TABLE IF NOT EXISTS lobbies(id text PRIMARY KEY NOT NULL,code text UNIQUE NOT NULL,host_id text NOT NULL,visibility text DEFAULT 'public' NOT NULL,password_hash text,ranked integer DEFAULT 0 NOT NULL,max_players integer DEFAULT 6 NOT NULL,performance_seconds integer DEFAULT 60 NOT NULL,topic_enabled integer DEFAULT 1 NOT NULL,phase text DEFAULT 'LOBBY' NOT NULL,current_performer_id text,phase_ends_at integer,version integer DEFAULT 0 NOT NULL,created_at text NOT NULL)`,
-      `CREATE TABLE IF NOT EXISTS lobby_players(lobby_id text NOT NULL,user_id text NOT NULL,ready integer DEFAULT 0 NOT NULL,seat integer NOT NULL,connected_at text NOT NULL,last_seen_at text NOT NULL)`,
-      `CREATE UNIQUE INDEX IF NOT EXISTS lobby_user_unique ON lobby_players(lobby_id,user_id)`,
-      `CREATE INDEX IF NOT EXISTS lobby_seat_idx ON lobby_players(lobby_id,seat)`,
-      `CREATE TABLE IF NOT EXISTS matches(id text PRIMARY KEY NOT NULL,lobby_id text,ranked integer NOT NULL,topic text,started_at text NOT NULL,finished_at text)`,
-      `CREATE TABLE IF NOT EXISTS performances(id text PRIMARY KEY NOT NULL,match_id text NOT NULL,user_id text NOT NULL,position integer NOT NULL,started_at text,ended_at text,average_score real)`,
-      `CREATE TABLE IF NOT EXISTS votes(match_id text NOT NULL,voter_id text NOT NULL,performer_id text NOT NULL,stars integer NOT NULL,created_at text NOT NULL)`,
-      `CREATE UNIQUE INDEX IF NOT EXISTS one_vote_per_performer ON votes(match_id,voter_id,performer_id)`,
-      `CREATE TABLE IF NOT EXISTS reactions(id text PRIMARY KEY NOT NULL,match_id text NOT NULL,sender_id text NOT NULL,performer_id text NOT NULL,kind text NOT NULL,created_at integer NOT NULL)`,
-      `CREATE INDEX IF NOT EXISTS reaction_feed_idx ON reactions(match_id,created_at)`,
-      `CREATE TABLE IF NOT EXISTS match_results(match_id text NOT NULL,user_id text NOT NULL,place integer NOT NULL,score real NOT NULL,rating_before integer NOT NULL,rating_after integer NOT NULL,xp_awarded integer NOT NULL)`,
-      `CREATE UNIQUE INDEX IF NOT EXISTS one_result_per_player ON match_results(match_id,user_id)`,
-      `CREATE TABLE IF NOT EXISTS voice_signals(id integer PRIMARY KEY AUTOINCREMENT NOT NULL,lobby_id text NOT NULL,from_user_id text NOT NULL,to_user_id text NOT NULL,type text NOT NULL,payload text NOT NULL,created_at integer NOT NULL)`,
-      `CREATE INDEX IF NOT EXISTS voice_signal_target_idx ON voice_signals(lobby_id,to_user_id,id)`,
-    ];
-    await database.batch(statements.map(sql=>database!.prepare(sql)));
-    const userColumns=((await database.prepare("PRAGMA table_info(users)").all()).results||[]) as Row[];
-    if(!userColumns.some(column=>column.name==="intro_id"))await database.prepare("ALTER TABLE users ADD COLUMN intro_id text DEFAULT 'dramatic-look' NOT NULL").run();
+    await database.batch(schemaStatements.map(sql=>database!.prepare(sql)));
     schemaReady=true;
   }
 }
@@ -62,7 +48,7 @@ async function calculateResults(lobby:Row,match:Row){
     LEFT JOIN votes v ON v.performer_id=u.id AND v.match_id=? WHERE lp.lobby_id=?
     GROUP BY u.id,u.username,u.avatar,u.rating`,match.id,lobby.id);
   const ranked=[...players].sort((a,b)=>Number(b.score)-Number(a.score));
-  const statements=[];let deltaSum=0;const rated=Boolean(lobby.ranked);
+  const statements:PostgresStatement[]=[];let deltaSum=0;const rated=Boolean(lobby.ranked);
   const deltas=ranked.map((p,index)=>{
     if(!rated)return 0;
     const actual=ranked.length===1?0.5:(ranked.length-1-index)/(ranked.length-1);
@@ -73,8 +59,8 @@ async function calculateResults(lobby:Row,match:Row){
   if(deltas.length>1)deltas[0]-=deltaSum;
   ranked.forEach((p,index)=>{
     const before=Number(p.rating),after=before+deltas[index],xp=80+Math.max(0,(ranked.length-index)*20);
-    statements.push(db().prepare(`INSERT OR IGNORE INTO match_results(match_id,user_id,place,score,rating_before,rating_after,xp_awarded)
-      VALUES(?,?,?,?,?,?,?)`).bind(match.id,p.id,index+1,Number(p.score),before,after,xp));
+    statements.push(db().prepare(`INSERT INTO match_results(match_id,user_id,place,score,rating_before,rating_after,xp_awarded)
+      VALUES(?,?,?,?,?,?,?) ON CONFLICT(match_id,user_id) DO NOTHING`).bind(match.id,p.id,index+1,Number(p.score),before,after,xp));
     statements.push(db().prepare("UPDATE users SET rating=?,xp=xp+?,level=1+CAST((xp+?)/500 AS INTEGER) WHERE id=?").bind(after,xp,xp,p.id));
   });
   statements.push(db().prepare("UPDATE matches SET finished_at=? WHERE id=?").bind(nowIso(),match.id));
@@ -156,7 +142,7 @@ export async function POST(request:Request){
     if(action==="profile"){
       const user=await one("SELECT id,username,avatar,rating,xp,level,intro_id FROM users WHERE id=?",userId);if(!user)throw new Error("PROFILE NOT FOUND");
       const stats=await one(`SELECT COUNT(*) matches,COUNT(CASE WHEN place=1 THEN 1 END) wins,COUNT(CASE WHEN place<=3 THEN 1 END) podiums,COALESCE(AVG(score),0) averageStars,COALESCE(MAX(rating_after),1000) highestRating FROM match_results WHERE user_id=?`,userId);
-      const stage=await one(`SELECT COALESCE(SUM((julianday(ended_at)-julianday(started_at))*86400),0) seconds FROM performances WHERE user_id=? AND started_at IS NOT NULL AND ended_at IS NOT NULL`,userId);
+      const stage=await one(`SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (ended_at-started_at))),0) seconds FROM performances WHERE user_id=? AND started_at IS NOT NULL AND ended_at IS NOT NULL`,userId);
       const history=await all(`SELECT r.place,r.score,r.rating_before,r.rating_after,m.finished_at,m.ranked FROM match_results r JOIN matches m ON m.id=r.match_id WHERE r.user_id=? ORDER BY m.finished_at DESC LIMIT 12`,userId);
       return Response.json({user:{...user,introId:isStageIntroId(user.intro_id)?user.intro_id:"dramatic-look",rating:Number(user.rating),xp:Number(user.xp),level:Number(user.level)},stats:{matches:Number(stats?.matches||0),wins:Number(stats?.wins||0),podiums:Number(stats?.podiums||0),averageStars:Number(stats?.averageStars||0),highestRating:Number(stats?.highestRating||1000),stageSeconds:Math.round(Number(stage?.seconds||0))},history:history.map(h=>({place:Number(h.place),score:Number(h.score),ratingChange:Number(h.rating_after)-Number(h.rating_before),finishedAt:String(h.finished_at||""),ranked:Boolean(h.ranked)}))});
     }
@@ -168,13 +154,13 @@ export async function POST(request:Request){
     if(action==="quickPlay"){
       await ensureUser(userId,username);const ranked=b.mode==="ranked";const open=await one("SELECT code FROM lobbies WHERE visibility='public' AND ranked=? AND phase='LOBBY' ORDER BY created_at LIMIT 1",ranked);
       if(!open)return Response.json(await createLobby(userId,username,ranked,6,60,true));
-      const existing=await findLobby(String(open.code));if(existing){const count=await one("SELECT COUNT(*) count FROM lobby_players WHERE lobby_id=?",existing.id);if(Number(count?.count)<Number(existing.max_players)){const seat=Number(count?.count||0);await run("INSERT OR IGNORE INTO lobby_players(lobby_id,user_id,ready,seat,connected_at,last_seen_at) VALUES(?,?,?,?,?,?)",existing.id,userId,false,seat,nowIso(),nowIso());return Response.json(await snapshot(String(open.code),userId))}}
+      const existing=await findLobby(String(open.code));if(existing){const count=await one("SELECT COUNT(*) count FROM lobby_players WHERE lobby_id=?",existing.id);if(Number(count?.count)<Number(existing.max_players)){const seat=Number(count?.count||0);await run("INSERT INTO lobby_players(lobby_id,user_id,ready,seat,connected_at,last_seen_at) VALUES(?,?,?,?,?,?) ON CONFLICT(lobby_id,user_id) DO NOTHING",existing.id,userId,false,seat,nowIso(),nowIso());return Response.json(await snapshot(String(open.code),userId))}}
       return Response.json(await createLobby(userId,username,ranked,6,60,true));
     }
     if(action==="join"){
       await ensureUser(userId,username);const lobby=await findLobby(lobbyCode);if(!lobby)throw new Error("LOBBY NOT FOUND");if(lobby.phase!=="LOBBY")throw new Error("THIS SHOW HAS ALREADY STARTED");
       const count=await one("SELECT COUNT(*) count FROM lobby_players WHERE lobby_id=?",lobby.id);if(Number(count?.count)>=Number(lobby.max_players))throw new Error("THE ROOM IS FULL");
-      await run("INSERT OR IGNORE INTO lobby_players(lobby_id,user_id,ready,seat,connected_at,last_seen_at) VALUES(?,?,?,?,?,?)",lobby.id,userId,false,Number(count?.count||0),nowIso(),nowIso());return Response.json(await snapshot(lobbyCode,userId));
+      await run("INSERT INTO lobby_players(lobby_id,user_id,ready,seat,connected_at,last_seen_at) VALUES(?,?,?,?,?,?) ON CONFLICT(lobby_id,user_id) DO NOTHING",lobby.id,userId,false,Number(count?.count||0),nowIso(),nowIso());return Response.json(await snapshot(lobbyCode,userId));
     }
     const lobby=await findLobby(lobbyCode);if(!lobby)throw new Error("LOBBY NOT FOUND");
     const member=await one("SELECT * FROM lobby_players WHERE lobby_id=? AND user_id=?",lobby.id,userId);if(!member)throw new Error("YOU ARE NOT IN THIS CLUB");
@@ -218,7 +204,7 @@ export async function POST(request:Request){
       await run("DELETE FROM lobby_players WHERE lobby_id=? AND user_id=?",lobby.id,userId);if(lobby.host_id===userId){const next=await one("SELECT user_id FROM lobby_players WHERE lobby_id=? ORDER BY seat LIMIT 1",lobby.id);if(next)await run("UPDATE lobbies SET host_id=?,version=version+1 WHERE id=?",next.user_id,lobby.id)}return Response.json({ok:true});
     }
     if(action==="rematch"){
-      if(lobby.host_id!==userId)throw new Error("ONLY THE HOST CAN CALL A REMATCH");if(lobby.phase!=="RESULTS")throw new Error("THE SHOW IS NOT FINISHED");await db().batch([db().prepare("UPDATE lobbies SET phase='LOBBY',current_performer_id=NULL,phase_ends_at=NULL,version=version+1 WHERE id=?").bind(lobby.id),db().prepare("UPDATE lobby_players SET ready=0 WHERE lobby_id=?").bind(lobby.id)]);return Response.json(await snapshot(lobbyCode,userId));
+      if(lobby.host_id!==userId)throw new Error("ONLY THE HOST CAN CALL A REMATCH");if(lobby.phase!=="RESULTS")throw new Error("THE SHOW IS NOT FINISHED");await db().batch([db().prepare("UPDATE lobbies SET phase='LOBBY',current_performer_id=NULL,phase_ends_at=NULL,version=version+1 WHERE id=?").bind(lobby.id),db().prepare("UPDATE lobby_players SET ready=FALSE WHERE lobby_id=?").bind(lobby.id)]);return Response.json(await snapshot(lobbyCode,userId));
     }
     throw new Error("UNKNOWN CLUB COMMAND");
   }catch(error){return problem(error)}
