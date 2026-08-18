@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `one_result_per_player` ON `match_results` (`match_id`,`user_id`);

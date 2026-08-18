@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1787001967027,
+      "tag": "0000_new_ultimatum",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787003995215,
+      "tag": "0001_curved_blindfold",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787005156388,
+      "tag": "0002_brave_sir_ram",
+      "breakpoints": true
+    }
+  ]
+}
