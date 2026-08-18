@@ -1,6 +1,7 @@
 import {isStageIntroId,stageIntroDurationMs,TOPICS,type GamePhase,type LobbySnapshot,type MatchResult,type Player,type ReactionKind,type StageIntroId} from "../../../lib/game/types";
 import {getPostgresDatabase,type PostgresStatement} from "../../../lib/db/postgres";
 import schemaStatements from "../../../db/schema-statements.json";
+import {authenticatedUserId} from "../../../lib/auth/session";
 
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
@@ -131,13 +132,16 @@ async function createLobby(userId:string,username:string,ranked:boolean,maxPlaye
 function problem(error:unknown,status=400){return Response.json({error:error instanceof Error?error.message:"The club hit a technical snag."},{status})}
 
 export async function GET(request:Request){
-  try{await initDb();const url=new URL(request.url),lobbyCode=url.searchParams.get("code")||"",userId=url.searchParams.get("userId")||"";if(!lobbyCode||!userId)return problem(new Error("Missing lobby code."));return Response.json(await snapshot(lobbyCode,userId),{headers:{"cache-control":"no-store"}})}catch(error){return problem(error,404)}
+  try{await initDb();const userId=await authenticatedUserId(request);if(!userId)return problem(new Error("AUTHENTICATION REQUIRED"),401);const url=new URL(request.url),lobbyCode=url.searchParams.get("code")||"";if(!lobbyCode)return problem(new Error("Missing lobby code."));return Response.json(await snapshot(lobbyCode,userId),{headers:{"cache-control":"no-store"}})}catch(error){return problem(error,404)}
 }
 
 export async function POST(request:Request){
   try{
     await initDb();
-    const b=await request.json() as Record<string,unknown>;const action=String(b.action||""),userId=String(b.userId||""),username=String(b.username||"New Comic"),lobbyCode=String(b.code||"").toUpperCase();
+    const b=await request.json() as Record<string,unknown>;const action=String(b.action||"");
+    const userId=await authenticatedUserId(request);if(!userId)return problem(new Error("AUTHENTICATION REQUIRED"),401);
+    const account=await one("SELECT username FROM users WHERE id=?",userId);if(!account)return problem(new Error("ACCOUNT NOT FOUND"),401);
+    const username=String(account.username),lobbyCode=String(b.code||"").toUpperCase();
     if(action==="leaderboard"){const rows=await all(`SELECT u.id,u.username,u.avatar,u.rating,u.level,COUNT(CASE WHEN r.place=1 THEN 1 END) wins FROM users u LEFT JOIN match_results r ON r.user_id=u.id GROUP BY u.id ORDER BY u.rating DESC LIMIT 50`);return Response.json({players:rows.map(x=>({id:String(x.id),username:String(x.username),avatar:String(x.avatar||"?"),rating:Number(x.rating),level:Number(x.level),wins:Number(x.wins)}))})}
     if(action==="profile"){
       const user=await one("SELECT id,username,avatar,rating,xp,level,intro_id FROM users WHERE id=?",userId);if(!user)throw new Error("PROFILE NOT FOUND");

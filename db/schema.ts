@@ -17,13 +17,29 @@ export const users = pgTable("users", {
   id: text("id").primaryKey(),
   email: text("email").unique(),
   username: text("username").notNull(),
+  firstName: text("first_name"),
+  lastName: text("last_name"),
   avatar: text("avatar"),
   rating: integer("rating").notNull().default(1000),
   xp: integer("xp").notNull().default(0),
   level: integer("level").notNull().default(1),
   introId: text("intro_id").notNull().default("dramatic-look"),
   createdAt: timestampString("created_at").notNull(),
+  updatedAt: timestampString("updated_at"),
 });
+
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestampString("expires_at").notNull(),
+    createdAt: timestampString("created_at").notNull(),
+    lastSeenAt: timestampString("last_seen_at").notNull(),
+  },
+  (table) => [uniqueIndex("session_token_idx").on(table.tokenHash), index("session_user_idx").on(table.userId)],
+);
 
 export const lobbies = pgTable("lobbies", {
   id: text("id").primaryKey(),

@@ -12,6 +12,8 @@
 | Audio | `lib/audio/audio-manager.ts` owns procedural ambience, music ducking, cues and persistent category volumes |
 | Persistence | Xata PostgreSQL stores users, lobbies, presence, matches, ballots, reactions, results and signaling messages |
 | Hosting | Netlify builds the standard Next.js app and runs the authoritative API as server functions |
+| Authentication | Random 256-bit session tokens in secure HTTP-only cookies; only SHA-256 token hashes are stored in Xata |
+| Media | Cropped 512×512 WEBP avatars in Netlify Blobs, referenced by URL from Xata |
 
 The current vertical slice uses short snapshot polling instead of trusting local state. Xata is shared across browser sessions, so lobby membership, readiness, timers, reactions, votes, results, reconnects and rematches are genuine cross-client interactions.
 
@@ -32,6 +34,7 @@ Important rules enforced by the API:
 - casual matches award XP but do not modify MMR
 - stale performer skip, page-refresh restoration and stale-host migration
 - short-lived WebRTC signals with periodic cleanup
+- authenticated identity derived from the server session rather than a client-supplied user ID
 
 ## Data model
 

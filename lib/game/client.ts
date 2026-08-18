@@ -2,16 +2,16 @@ import type {GameMode,LobbySnapshot,ReactionKind,StageIntroId} from "./types";
 
 const ENDPOINT="/api/game";
 
-export function getIdentity(){
-  if(typeof window==="undefined") return {id:"guest",username:"ARTJOM"};
-  let id=sessionStorage.getItem("ccb-player-id");
-  if(!id){id=typeof crypto.randomUUID==="function"?crypto.randomUUID():`guest-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;sessionStorage.setItem("ccb-player-id",id)}
-  const username=localStorage.getItem("ccb-username")||"ARTJOM";
-  return {id,username};
-}
+export type AccountUser={id:string;firstName:string;lastName:string;nickname:string;avatarUrl:string;rating:number;xp:number;level:number;introId:string};
+
+export const authApi={
+  session:async()=>{const response=await fetch("/api/auth",{cache:"no-store",credentials:"include"});const data=await response.json();if(!response.ok)throw new Error(data.error||"No active session");return data as {state:"AUTHENTICATED";user:AccountUser}},
+  create:async(form:FormData)=>{const response=await fetch("/api/auth",{method:"POST",body:form,credentials:"include"});const data=await response.json();if(!response.ok)throw new Error(data.error||"Account creation failed");return data as {state:"AUTHENTICATED";user:AccountUser}},
+  logout:()=>fetch("/api/auth",{method:"DELETE",credentials:"include"}),
+};
 
 async function request<T>(body:Record<string,unknown>):Promise<T>{
-  const response=await fetch(ENDPOINT,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+  const response=await fetch(ENDPOINT,{method:"POST",headers:{"content-type":"application/json"},credentials:"include",body:JSON.stringify(body)});
   const data=await response.json() as T&{error?:string};
   if(!response.ok) throw new Error(data.error||"The club server did not answer.");
   return data;
@@ -21,8 +21,8 @@ export const gameApi={
   quickPlay:(mode:Exclude<GameMode,"private">,id:string,username:string)=>request<LobbySnapshot>({action:"quickPlay",mode,userId:id,username}),
   create:(id:string,username:string,settings:{maxPlayers:number;performanceSeconds:number;topicEnabled:boolean})=>request<LobbySnapshot>({action:"create",userId:id,username,...settings}),
   join:(code:string,id:string,username:string)=>request<LobbySnapshot>({action:"join",code:code.trim().toUpperCase(),userId:id,username}),
-  snapshot:async(code:string,id:string)=>{
-    const response=await fetch(`${ENDPOINT}?code=${encodeURIComponent(code)}&userId=${encodeURIComponent(id)}`,{cache:"no-store"});
+  snapshot:async(code:string)=>{
+    const response=await fetch(`${ENDPOINT}?code=${encodeURIComponent(code)}`,{cache:"no-store",credentials:"include"});
     const data=await response.json() as LobbySnapshot&{error?:string};
     if(!response.ok) throw new Error(data.error||"Connection to the club was lost.");
     return data;

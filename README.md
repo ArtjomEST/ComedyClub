@@ -28,6 +28,6 @@ In Netlify, add `DATABASE_URL` in **Project configuration → Environment variab
 with Functions scope before the first production deploy. The value must never use
 the `NEXT_PUBLIC_` prefix.
 
-The first API request initializes an empty preview database. Browser identity and accessibility/audio preferences are stored on the current device; ChatGPT sign-in is not required.
+The first API request initializes an empty database. New players complete profile, avatar and microphone onboarding; the server then creates a 90-day HTTP-only session. Identity and progression live in Xata, while only accessibility/audio preferences remain on the device. Avatars are stored in Netlify Blobs.
 
 See `ARCHITECTURE.md` for the state machine, security rules and production scaling path.
